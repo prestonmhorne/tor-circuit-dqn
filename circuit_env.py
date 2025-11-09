@@ -1,22 +1,33 @@
 # circuit_env.py
 
-import config
-from gymnasium import spaces
-import gymnasium as gym
-import numpy as np
 from collections import deque
 
+import gymnasium as gym
+from gymnasium import spaces
+import numpy as np
+
+import config
+
 class CircuitEnv(gym.Env): 
+    """
+    
+    """
 
     def __init__(self):
+        """
+        Initialize the Tor circuit construction environment
+
+        Sets up a relay network, action/observation spaces, and tracking state
+        for sequential circuit building (entry guard -> middle -> exit).
+        """
+
         super().__init__()
 
         self.num_relays = config.ENV_NUM_RELAYS
-
         self.relays = self._generate_relays()
-
+        
+        # Gymnasium spaces
         self.action_space = spaces.Discrete(self.num_relays)
-
         self.observation_space = spaces.Box(
             low=0,
             high=1,
@@ -24,45 +35,46 @@ class CircuitEnv(gym.Env):
             dtype=np.float32
         )
 
+        # Circuit state
         self.persistent_guard = self._select_persistent_guard()
         self.entry_guard = None
         self.middle_relay = None
         self.exit_relay = None
         self.circuit_pos = 0
 
+        # Tracking
         self.circuit_history = deque(maxlen=config.ANONYMITY_HISTORY_SIZE)
-
         self.relay_status = np.ones(self.num_relays, dtype=bool)
-        self.episode_count = 0
         self.guard_rotation_counter = 0
 
-    def _select_persistent_guard(self):
-        guards = [i for i in range(self.num_relays) if self.relays[i]['guard_flag']]
-        
-        quality_guards = [i for i in guards
-                          if self.relays[i]['bandwidth'] > 200 and
-                          self.relays[i]['latency'] < 150]
-        
-        if quality_guards:
-            bandwidths = np.array([self.relays[i]['bandwidth'] for i in quality_guards])
-            return np.random.choice(quality_guards, p=bandwidths/bandwidths.sum())
-
-        bandwidths = np.array([self.relays[i]['bandwidth'] for i in guards])
-        return np.random.choice(guards, p=bandwidths/bandwidths.sum())
-    
     def get_action_mask(self):
+        """
+        Get boolean mask indicating which relays are valid for selection
+
+        Enforces simplified version of Tor protocol based on circuit position. 
+        Filters out failed relays, prevents relay reuse in the same circuit,
+        and requires exit flag for exit relay selection.
+
+        Returns: 
+            np.ndarray: Boolean mask (True = valid action)
+        """
+
+        # Create boolean array with all relays set to True
         mask = np.ones(self.num_relays, dtype=bool)
 
-        if config.ENABLE_RELAY_FAILURES:
-            mask = mask & self.relay_status
+        # Filter out failed relays
+        mask = mask & self.relay_status
 
         if self.circuit_pos == 0:
+            # Prevent reuse of entry guard as middle relay
             mask[self.entry_guard] = False
 
         elif self.circuit_pos == 1:
+            # Prevent reuse of entry guard and middle relay
             mask[self.entry_guard] = False
             mask[self.middle_relay] = False
 
+            # Only allows relays with exit flag
             for i in range(self.num_relays):
                 if not self.relays[i]['exit_flag']:
                     mask[i] = False
@@ -75,7 +87,6 @@ class CircuitEnv(gym.Env):
         super().reset(seed=seed)
 
         self._update_network_state()
-        self.episode_count += 1
 
         self.entry_guard = self.persistent_guard
         self.middle_relay = None
@@ -118,6 +129,20 @@ class CircuitEnv(gym.Env):
         info = {}
 
         return obs, reward, terminated, truncated, info
+
+    def _select_persistent_guard(self):
+        guards = [i for i in range(self.num_relays) if self.relays[i]['guard_flag']]
+
+        quality_guards = [i for i in guards
+                          if self.relays[i]['bandwidth'] > 200 and
+                          self.relays[i]['latency'] < 150]
+
+        if quality_guards:
+            bandwidths = np.array([self.relays[i]['bandwidth'] for i in quality_guards])
+            return np.random.choice(quality_guards, p=bandwidths/bandwidths.sum())
+
+        bandwidths = np.array([self.relays[i]['bandwidth'] for i in guards])
+        return np.random.choice(guards, p=bandwidths/bandwidths.sum())
 
     def _generate_relays(self):
         num_guards = int(self.num_relays * config.ENV_GUARD_FRACTION)
@@ -165,16 +190,15 @@ class CircuitEnv(gym.Env):
         return relays
 
     def _update_network_state(self):
-        """Update network state: relay failures, recovery, congestion, guard rotation"""
 
-        if config.ENABLE_RELAY_FAILURES:
-            for i in range(self.num_relays):
-                if self.relay_status[i]:  
-                    if np.random.random() < config.RELAY_FAILURE_RATE:
-                        self.relay_status[i] = False  
-                else:  
-                    if np.random.random() < config.RELAY_RECOVERY_RATE:
-                        self.relay_status[i] = True  
+        # Update relay failures and recovery
+        for i in range(self.num_relays):
+            if self.relay_status[i]:
+                if np.random.random() < config.RELAY_FAILURE_RATE:
+                    self.relay_status[i] = False
+            else:
+                if np.random.random() < config.RELAY_RECOVERY_RATE:
+                    self.relay_status[i] = True
 
         if config.ENABLE_CONGESTION:
             for relay in self.relays:
@@ -195,12 +219,7 @@ class CircuitEnv(gym.Env):
                     print(f"Guard rotation: {old_guard} → {self.persistent_guard}")
 
     def _get_observation(self):
-        """
-        Standard state representation for sequential circuit construction:
-        - Position in circuit (which relay we're selecting)
-        - Features of already-selected relays (context)
-        - Action features (relay candidates) passed separately to network
-        """
+
         obs = np.zeros(9, dtype=np.float32)
 
         obs[0] = self.circuit_pos / 2.0
@@ -219,11 +238,6 @@ class CircuitEnv(gym.Env):
         return obs
     
     def _calculate_diversity_bonus(self):
-        """
-        Calculate diversity bonus based on how unique this circuit is from recent history.
-        Uses temporal weighting: recent circuits penalized more than older ones.
-        Heavily penalizes exact circuit matches.
-        """
         if len(self.circuit_history) == 0:
             return 1.0
 

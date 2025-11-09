@@ -82,8 +82,6 @@ class CircuitEnv(gym.Env):
         if self.circuit_pos == 0:
             if action != self.entry_guard:
                 self.middle_relay = action
-                middle_bw = self.relays[action]['bandwidth']
-                reward = (middle_bw / config.MAX_BANDWIDTH) * config.REWARD_MIDDLE_BANDWIDTH_WEIGHT
                 self.circuit_pos = 1
             else: 
                 reward = config.REWARD_INVALID
@@ -126,7 +124,7 @@ class CircuitEnv(gym.Env):
 
         for i in range(self.num_relays):
 
-            bandwidth = np.random.pareto(a=1.5) * 10 + config.MIN_BANDWIDTH
+            bandwidth = np.random.pareto(a=1.2) * 50 + config.MIN_BANDWIDTH
             bandwidth = min(bandwidth, config.MAX_BANDWIDTH)
 
             latency = np.random.exponential(scale=50) + config.MIN_LATENCY

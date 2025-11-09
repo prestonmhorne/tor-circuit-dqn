@@ -19,7 +19,7 @@ class CircuitEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=0, 
             high=1, 
-            shape=(self.num_relays * 3 + 1,),
+            shape=(self.num_relays * 4 + 1,),
             dtype=np.float32
         )
 
@@ -31,6 +31,15 @@ class CircuitEnv(gym.Env):
 
     def _select_persistent_guard(self):
         guards = [i for i in range(self.num_relays) if self.relays[i]['guard_flag']]
+        
+        quality_guards = [i for i in guards
+                          if self.relays[i]['bandwidth'] > 200 and
+                          self.relays[i]['latency'] < 150]
+        
+        if quality_guards:
+            bandwidths = np.array([self.relays[i]['bandwidth'] for i in quality_guards])
+            return np.random.choice(quality_guards, p=bandwidths/bandwidths.sum())
+
         bandwidths = np.array([self.relays[i]['bandwidth'] for i in guards])
         return np.random.choice(guards, p=bandwidths/bandwidths.sum())
     
@@ -48,6 +57,9 @@ class CircuitEnv(gym.Env):
                 if not self.relays[i]['exit_flag']:
                     mask[i] = False
         return mask 
+    
+    def get_relay_info(self):
+        return self.relays
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -70,7 +82,8 @@ class CircuitEnv(gym.Env):
         if self.circuit_pos == 0:
             if action != self.entry_guard:
                 self.middle_relay = action
-                reward = config.REWARD_VALID
+                middle_bw = self.relays[action]['bandwidth']
+                reward = (middle_bw / config.MAX_BANDWIDTH) * config.REWARD_MIDDLE_BANDWIDTH_WEIGHT
                 self.circuit_pos = 1
             else: 
                 reward = config.REWARD_INVALID
@@ -112,10 +125,17 @@ class CircuitEnv(gym.Env):
         relays = []
 
         for i in range(self.num_relays):
+
+            bandwidth = np.random.pareto(a=1.5) * 10 + config.MIN_BANDWIDTH
+            bandwidth = min(bandwidth, config.MAX_BANDWIDTH)
+
+            latency = np.random.exponential(scale=50) + config.MIN_LATENCY
+            latency = min(latency, config.MAX_LATENCY)
+
             relay = {
                 'id': i,
-                'bandwidth': np.random.uniform(config.MIN_BANDWIDTH, config.MAX_BANDWIDTH),
-                'latency': np.random.uniform(config.MIN_LATENCY, config.MAX_LATENCY),
+                'bandwidth': bandwidth,
+                'latency': latency,
                 'guard_flag': i in guard_indices,
                 'exit_flag': i in exit_indices,
             }
@@ -126,14 +146,15 @@ class CircuitEnv(gym.Env):
         return relays
     
     def _get_observation(self):
-        obs = np.zeros(self.num_relays * 3 + 1, dtype=np.float32)
+        obs = np.zeros(self.num_relays * 4 + 1, dtype=np.float32)
 
         obs[0] = self.circuit_pos / 1.0
 
         for i in range(self.num_relays):
-            obs[i*3 + 1] = self.relays[i]['bandwidth'] / config.MAX_BANDWIDTH
-            obs[i*3 + 2] = float(self.relays[i]['guard_flag'])
-            obs[i*3 + 3] = float(self.relays[i]['exit_flag'])
+            obs[i*4 + 1] = self.relays[i]['bandwidth'] / config.MAX_BANDWIDTH
+            obs[i*4 + 2] = self.relays[i]['latency'] / config.MAX_LATENCY
+            obs[i*4 + 3] = float(self.relays[i]['guard_flag'])
+            obs[i*4 + 4] = float(self.relays[i]['exit_flag'])
 
         return obs
     

@@ -6,11 +6,12 @@ import argparse
 import config
 from circuit_env import CircuitEnv
 from dqn_agent import DQNAgent
+from baseline_agent import BaselineAgent
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--agent', type=str, default='dqn',
-                        choices=['dqn'])
+                        choices=['baseline', 'dqn'])
     parser.add_argument('--episodes', type=int, default=config.NUM_EPISODES)
     parser.add_argument('--seed', type=int, default=config.RANDOM_SEED)
     
@@ -21,10 +22,17 @@ def main():
 
     env = CircuitEnv()
 
-    agent = DQNAgent(
-        action_dim=config.NUM_RELAYS,
-        state_dim=env.observation_space.shape[0]
-    )
+    if args.agent == 'dqn':
+        agent = DQNAgent(
+            action_dim=config.NUM_RELAYS,
+            state_dim=env.observation_space.shape[0]
+        )
+
+    elif args.agent == 'baseline':
+        agent = BaselineAgent(
+            action_dim=config.NUM_RELAYS,
+            state_dim=env.observation_space.shape[0]
+        )
 
 
     print(f"Training {agent.__class__.__name__}...")
@@ -39,24 +47,35 @@ def main():
 
         while not terminated:
             action_mask = env.get_action_mask()
-            action = agent.policy(obs, action_mask)
+            
+            if args.agent == 'baseline':
+                relay_info = env.get_relay_info()
+                action = agent.policy(obs, action_mask, relay_info)
+
+            else:
+                action = agent.policy(obs, action_mask)
+
             next_obs, reward, terminated, _, _ = env.step(action)
-            agent.update(obs, action, reward, next_obs, terminated)
+            if args.agent == 'dqn':
+                agent.update(obs, action, reward, next_obs, terminated)
 
             obs = next_obs
             episode_reward += reward
             steps += 1
 
-        agent.decay_epsilon()
+        if args.agent == 'dqn':
+            agent.decay_epsilon()
 
         if episode % config.LOG_FREQUENCY == 0:
-            metrics = f"Episode {episode:5d}/{args.episodes} | Reward: {episode_reward:7.2f} | Steps: {steps}"
-            metrics += f" | Epsilon: {agent.epsilon:.3f}"
+            metrics = f"Episode {episode:5d}/{args.episodes} | Reward: {episode_reward:7.2f}"
+            if args.agent == 'dqn':
+                metrics += f" | Epsilon: {agent.epsilon:.3f}"
             print(metrics)
             
             
     print("Training Complete!")
-    print(f"Final Epsilon: {agent.epsilon:.3f}")
+    if args.agent == 'dqn':
+        print(f"Final Epsilon: {agent.epsilon:.3f}")
 
     if env.exit_relay is not None:
         entry_guard = env.relays[env.entry_guard]
